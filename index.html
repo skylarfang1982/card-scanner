@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web 名片掃描器</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn { display: block; width: 100%; padding: 15px; background: #007aff; color: white; text-align: center; border-radius: 8px; text-decoration: none; font-size: 18px; font-weight: bold; cursor: pointer; border: none; }
+        .btn:disabled { background: #ccc; }
+        #cameraInput { display: none; }
+        #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
+        #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; }
+        .result-item { margin-bottom: 10px; }
+        .result-label { font-size: 12px; color: #888; text-transform: uppercase; }
+        .result-value { font-size: 18px; font-weight: 500; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>📷 Web 名片掃描</h2>
+        <input type="file" accept="image/*" capture="environment" id="cameraInput">
+        <button class="btn" id="scanBtn" onclick="document.getElementById('cameraInput').click()">拍照或上傳名片</button>
+        <img id="preview" alt="名片預覽">
+        <div id="status"></div>
+    </div>
+
+    <div class="card" id="resultCard" style="display: none;">
+        <h3>辨識結果</h3>
+        <div class="result-item">
+            <div class="result-label">名稱 / 公司</div>
+            <div class="result-value" id="resName">-</div>
+        </div>
+        <div class="result-item">
+            <div class="result-label">電話</div>
+            <div class="result-value" id="resPhone">-</div>
+        </div>
+        <div class="result-item">
+            <div class="result-label">Email</div>
+            <div class="result-value" id="resEmail">-</div>
+        </div>
+        <hr>
+        <div class="result-item">
+            <div class="result-label">完整文字</div>
+            <div class="result-value" style="font-size: 14px; white-space: pre-wrap;" id="resFullText">-</div>
+        </div>
+    </div>
+
+    <script>
+        const cameraInput = document.getElementById('cameraInput');
+        const preview = document.getElementById('preview');
+        const status = document.getElementById('status');
+        const scanBtn = document.getElementById('scanBtn');
+        const resultCard = document.getElementById('resultCard');
+
+        // 監聽相機拍照或圖片上傳
+        cameraInput.addEventListener('change', function(e) {
+            if (e.target.files && e.target.files[0]) {
+                const file = e.target.files[0];
+                
+                // 顯示預覽圖
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    preview.src = event.target.result;
+                    preview.style.display = 'block';
+                    performOCR(event.target.result);
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // 執行 OCR 辨識
+        async function performOCR(imageData) {
+            scanBtn.disabled = true;
+            resultCard.style.display = 'none';
+            status.innerText = "⏳ 正在載入辨識引擎與語言包 (初次載入需較久)...";
+
+            try {
+                // chi_tra 為繁體中文，eng 為英文
+                const worker = await Tesseract.createWorker('chi_tra+eng');
+                
+                status.innerText = "🔍 正在掃描文字中...";
+                const ret = await worker.recognize(imageData);
+                const text = ret.data.text;
+                
+                await worker.terminate();
+                
+                status.innerText = "✅ 掃描完成！";
+                parseText(text);
+
+            } catch (error) {
+                console.error(error);
+                status.innerText = "❌ 辨識失敗，請重試。";
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        // 解析文字邏輯 (簡易版)
+        function parseText(text) {
+            let name = "";
+            let phone = "";
+            let email = "";
+
+            const lines = text.split('\n');
+            const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+            const phoneRegex = /[0-9\-\+\(\)\s]{8,}/;
+
+            for (let line of lines) {
+                line = line.trim();
+                if (!line) continue;
+
+                // 找信箱
+                if (!email && emailRegex.test(line)) {
+                    email = line.match(emailRegex)[0];
+                }
+                // 找電話 (排除日期或統編的誤判，這裡做簡單處理)
+                else if (!phone && phoneRegex.test(line) && /\d{4}/.test(line)) {
+                    phone = line;
+                }
+                // 將第一行非空白文字當作名字
+                else if (!name) {
+                    name = line;
+                }
+            }
+
+            // 更新 UI
+            document.getElementById('resName').innerText = name || "無法辨識";
+            document.getElementById('resPhone').innerText = phone || "無法辨識";
+            document.getElementById('resEmail').innerText = email || "無法辨識";
+            document.getElementById('resFullText').innerText = text;
+            
+            resultCard.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
