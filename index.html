@@ -142,4 +142,27 @@
                     let pureText = originalLine.replace(/[^\u4e00-\u9fa5a-zA-Z]/g, "");
 
                     // 判斷是否為 2~4 個字的純中文
-                    let isChineseName = /^[\u4
+                    let isChineseName = /^[\u4e00-\u9fa5]{2,4}$/.test(pureText);
+                    // 判斷是否為 2~3 個英文單字 (允許保留原本的空白)
+                    let cleanEngLine = originalLine.replace(/[^\w\s]/g, "").trim();
+                    let isEnglishName = /^[a-zA-Z]+(\s[a-zA-Z]+){1,2}$/.test(cleanEngLine);
+
+                    if (isChineseName) {
+                        name = pureText; // 存入乾淨無亂碼的中文
+                    } else if (isEnglishName) {
+                        name = cleanEngLine; // 存入乾淨無亂碼的英文
+                    }
+                }
+            }
+
+            // 更新 UI 的輸入框數值
+            document.getElementById('resName').value = name;
+            document.getElementById('resPhone').value = phone;
+            document.getElementById('resEmail').value = email;
+            document.getElementById('resFullText').innerText = text;
+            
+            resultCard.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
