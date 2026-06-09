@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>雙引擎名片掃描器 (全模型解鎖版)</title>
+    <title>雙引擎名片掃描器 (完整欄位版)</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
@@ -20,12 +20,13 @@
         #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
         #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; font-weight: bold; }
         .result-item { margin-bottom: 15px; }
-        .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
+        .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; font-weight: bold; }
         .result-input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; background-color: #fafafa; }
         .result-input:focus { outline: none; border-color: #007aff; background-color: #fff; }
         .saved-item { background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #007aff; display: flex; justify-content: space-between; align-items: center; }
-        .saved-info { font-size: 15px; line-height: 1.5; color: #333; }
-        .clickable-name { font-size: 18px; display: block; margin-bottom: 4px; color: #007aff; text-decoration: underline; cursor: pointer; }
+        .saved-info { font-size: 15px; line-height: 1.6; color: #333; flex: 1; }
+        .clickable-name { font-size: 18px; display: block; margin-bottom: 4px; color: #007aff; text-decoration: underline; cursor: pointer; font-weight: bold; }
+        .company-title { font-size: 14px; color: #666; margin-bottom: 8px; font-weight: 500; }
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }
         .modal-content { margin: auto; display: block; max-width: 95%; max-height: 80vh; margin-top: 15vh; border-radius: 8px; object-fit: contain; }
         .close { position: absolute; top: 20px; right: 25px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; }
@@ -64,18 +65,38 @@
 
     <div class="card" id="resultCard" style="display: none;">
         <h3>✏️ 檢查與修改</h3>
+        
         <div class="result-item">
-            <div class="result-label">名稱 / 姓名</div>
-            <input type="text" class="result-input" id="resName" placeholder="辨識中...">
+            <div class="result-label">公司名稱</div>
+            <input type="text" class="result-input" id="resCompany" placeholder="辨識中...">
         </div>
+        
+        <div class="flex-row" style="margin-bottom: 15px;">
+            <div style="flex: 1;">
+                <div class="result-label">名稱 / 姓名</div>
+                <input type="text" class="result-input" id="resName" placeholder="辨識中...">
+            </div>
+            <div style="flex: 1;">
+                <div class="result-label">職稱</div>
+                <input type="text" class="result-input" id="resTitle" placeholder="辨識中...">
+            </div>
+        </div>
+
         <div class="result-item">
             <div class="result-label">手機</div>
             <input type="tel" class="result-input" id="resPhone" placeholder="辨識中...">
         </div>
+        
+        <div class="result-item">
+            <div class="result-label">公司電話 (含分機)</div>
+            <input type="tel" class="result-input" id="resTel" placeholder="辨識中...">
+        </div>
+        
         <div class="result-item">
             <div class="result-label">Email</div>
             <input type="email" class="result-input" id="resEmail" placeholder="辨識中...">
         </div>
+        
         <button class="btn btn-save" onclick="saveCurrentCard()">💾 儲存這筆名片</button>
         
         <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
@@ -161,11 +182,10 @@
 
                 const data = await response.json();
                 
-                // 【核心升級】解鎖所有支援文字生成的 Gemini 模型，不再限制版本號
                 const validModels = data.models.filter(m => 
                     m.supportedGenerationMethods.includes("generateContent") && 
                     m.name.includes("gemini") && 
-                    !m.name.includes("embedding") // 排除不能看圖的 embedding 模型
+                    !m.name.includes("embedding") 
                 );
 
                 if (validModels.length === 0) throw new Error("此金鑰沒有任何可用的模型權限");
@@ -243,6 +263,9 @@
             resultCard.style.display = 'none';
             document.getElementById('fullTextContainer').style.display = 'none';
 
+            // 清空所有欄位
+            ['resName', 'resTitle', 'resCompany', 'resPhone', 'resTel', 'resEmail'].forEach(id => document.getElementById(id).value = "");
+
             if (apiKey && apiKey.length > 10 && selectedModel) {
                 try {
                     status.innerText = `🧠 AI (${selectedModel.split('/')[1]}) 正在理解名片內容...`;
@@ -272,17 +295,22 @@
             }
         }
 
+        // --- 升級版的 AI Prompt，加入新欄位 ---
         async function performAIOCR(imageData, apiKey, modelName) {
             const base64Data = imageData.split(',')[1];
             const mimeType = imageData.split(';')[0].split(':')[1];
 
             const promptText = `你現在是一個專業的名片資料整理助理。
-請提取以下 3 個欄位：
-1. name: 名片上的「人名」
-2. phone: 台灣手機號碼 (09開頭10碼)
-3. email: 電子信箱
-請務必「只」回傳一個 JSON 格式的物件。若找不到請回傳 ""。
-範例：{"name": "王小明", "phone": "0912345678", "email": "test@example.com"}`;
+請提取以下 6 個欄位：
+1. company: 名片上的「公司名稱」
+2. name: 名片上的「人名」
+3. title: 名片上的「職稱」(如總經理、業務經理、專員等)
+4. phone: 台灣手機號碼 (09開頭10碼)
+5. tel: 市話或公司電話 (包含區碼、分機，例如：02-1234-5678 ext. 123)
+6. email: 電子信箱
+
+請務必「只」回傳一個 JSON 格式的物件。若圖片中找不到該欄位，請回傳空字串 ""。
+範例：{"company": "蘋果科技股份有限公司", "name": "王小明", "title": "專案經理", "phone": "0912345678", "tel": "02-1234-5678#12", "email": "test@example.com"}`;
 
             const requestBody = {
                 contents: [{
@@ -312,8 +340,12 @@
             aiResponseText = aiResponseText.replace(/```json/gi, '').replace(/```/g, '').trim();
             const parsedData = JSON.parse(aiResponseText);
 
+            // 綁定 6 個欄位
+            document.getElementById('resCompany').value = parsedData.company || "";
             document.getElementById('resName').value = parsedData.name || "";
+            document.getElementById('resTitle').value = parsedData.title || "";
             document.getElementById('resPhone').value = parsedData.phone || "";
+            document.getElementById('resTel').value = parsedData.tel || "";
             document.getElementById('resEmail').value = parsedData.email || "";
             
             resultCard.style.display = 'block';
@@ -326,7 +358,7 @@
             const text = ret.data.text;
             await worker.terminate();
             
-            let name = "", phone = "", email = "";
+            let name = "", phone = "", email = "", company = "", tel = "", title = "";
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
             let emailMatch = text.match(emailRegex);
             if (emailMatch) email = emailMatch[0];
@@ -342,12 +374,23 @@
             }
 
             const lines = text.split('\n');
-            const excludeWords = ["公司", "企業", "實業", "科技", "設計", "工作室", "股份", "有限", "大學", "協會", "中心", "部門", "業務", "經理", "總監", "工程師", "專員", "負責人", "董事", "代表", "地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www"];
+            const excludeWords = ["地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www"];
             for (let line of lines) {
                 let originalLine = line.trim();
                 if (!originalLine) continue;
+                
+                if (originalLine.includes("公司") || originalLine.includes("企業")) {
+                    if (!company) company = originalLine;
+                    continue;
+                }
+                if (originalLine.includes("02-") || originalLine.includes("03-") || originalLine.includes("04-")) {
+                    if (!tel) tel = originalLine.replace(/[^\d\-\#\s]/g, "");
+                    continue;
+                }
+
                 if (email && originalLine.includes(email)) continue;
                 if (phone && originalLine.replace(/[^\d]/g, "").includes(phone)) continue;
+                
                 if (!name && !/\d/.test(originalLine)) {
                     if (excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()))) continue;
                     let pureChinese = originalLine.replace(/[^\u4e00-\u9fa5]/g, "");
@@ -360,21 +403,29 @@
                 }
             }
 
+            document.getElementById('resCompany').value = company;
             document.getElementById('resName').value = name;
             document.getElementById('resPhone').value = phone;
+            document.getElementById('resTel').value = tel;
             document.getElementById('resEmail').value = email;
+            document.getElementById('resTitle').value = title; // 傳統 OCR 很難精準抓職稱，留空讓手動輸入
+
             document.getElementById('resFullText').innerText = text;
             document.getElementById('fullTextContainer').style.display = 'block';
             resultCard.style.display = 'block';
         }
 
         function saveCurrentCard() {
+            const company = document.getElementById('resCompany').value.trim();
             const name = document.getElementById('resName').value.trim();
+            const title = document.getElementById('resTitle').value.trim();
             const phone = document.getElementById('resPhone').value.trim();
+            const tel = document.getElementById('resTel').value.trim();
             const email = document.getElementById('resEmail').value.trim();
-            if (!name && !phone && !email) { alert("至少需要填寫一項資料！"); return; }
             
-            savedCardsArray.push({ name, phone, email, imageData: currentImageData });
+            if (!name && !phone && !email && !company) { alert("至少需要填寫一項資料！"); return; }
+            
+            savedCardsArray.push({ company, name, title, phone, tel, email, imageData: currentImageData });
             persistDataToBrowser();
             
             resultCard.style.display = 'none';
@@ -390,11 +441,18 @@
             container.style.display = 'block';
             list.innerHTML = ""; 
             savedCardsArray.forEach((card, index) => {
+                // 處理無資料的顯示美化
+                const displayCompany = card.company ? card.company : '未輸入公司';
+                const displayTitle = card.title ? card.title : '未輸入職稱';
+
                 list.innerHTML += `
                     <div class="saved-item">
                         <div class="saved-info">
                             <span class="clickable-name" onclick="viewImage(${index})">🖼️ ${card.name || '未輸入姓名'}</span>
-                            📱 ${card.phone || '無'}<br>✉️ ${card.email || '無'}
+                            <div class="company-title">🏢 ${displayCompany} | 💼 ${displayTitle}</div>
+                            📱 手機：${card.phone || '無'}<br>
+                            ☎️ 公司：${card.tel || '無'}<br>
+                            ✉️ ${card.email || '無'}
                         </div>
                         <button class="btn btn-delete" onclick="deleteCard(${index})">刪除</button>
                     </div>`;
@@ -443,7 +501,18 @@
                 try {
                     const importedData = JSON.parse(e.target.result);
                     if (Array.isArray(importedData)) {
-                        savedCardsArray = savedCardsArray.concat(importedData);
+                        // 針對舊版備份檔相容性處理 (補上空的新欄位)
+                        const processedData = importedData.map(card => ({
+                            name: card.name || "",
+                            title: card.title || "",
+                            company: card.company || "",
+                            phone: card.phone || "",
+                            tel: card.tel || "",
+                            email: card.email || "",
+                            imageData: card.imageData || ""
+                        }));
+
+                        savedCardsArray = savedCardsArray.concat(processedData);
                         persistDataToBrowser();
                         renderSavedCards();
                         alert(`成功匯入 ${importedData.length} 筆名片資料與照片！`);
