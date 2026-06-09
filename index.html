@@ -86,7 +86,7 @@
         async function performOCR(imageData) {
             scanBtn.disabled = true;
             resultCard.style.display = 'none';
-            status.innerText = "⏳ 正在載入辨識引擎與語言包...";
+            status.innerText = "⏳ 正在載入辨識引擎...";
 
             try {
                 const worker = await Tesseract.createWorker('chi_tra+eng');
@@ -111,62 +111,58 @@
             let phone = "";
             let email = "";
 
-            const lines = text.split('\n');
+            // --- 1. 全局暴力抓 Email (無視分行) ---
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-            
-            // 黑名單擴充：加入縣市、先生小姐等常見干擾詞
+            let emailMatch = text.match(emailRegex);
+            if (emailMatch) {
+                email = emailMatch[0];
+            }
+
+            // --- 2. 全局暴力抓手機 (無視分行與符號) ---
+            // 尋找 09 或 8869 開頭，後面跟著 8 個數字 (中間可夾雜空白或短橫線)
+            const phoneRegex = /(?:09|\+?886\s*9)(?:[\s\-]*\d){8}/g;
+            let phoneMatches = text.match(phoneRegex);
+            if (phoneMatches) {
+                for (let p of phoneMatches) {
+                    let cleanP = p.replace(/[^\d]/g, ""); // 拔除所有非數字
+                    if (cleanP.startsWith("8869")) cleanP = "0" + cleanP.substring(3);
+                    if (cleanP.length >= 10 && cleanP.startsWith("09")) {
+                        phone = cleanP.substring(0, 10); // 精準取 10 碼
+                        break;
+                    }
+                }
+            }
+
+            // --- 3. 逐行嚴格抓姓名 ---
+            const lines = text.split('\n');
             const excludeWords = ["公司", "企業", "實業", "科技", "設計", "工作室", "股份", "有限", "大學", "協會", "中心", "部門", "業務", "經理", "總監", "工程師", "專員", "負責人", "董事", "代表", "地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www", "市", "區", "縣", "鄉", "鎮", "先生", "小姐"];
 
             for (let line of lines) {
                 let originalLine = line.trim();
                 if (!originalLine) continue;
 
-                // 1. 找信箱
-                if (!email && emailRegex.test(originalLine)) {
-                    email = originalLine.match(emailRegex)[0];
-                    continue; 
-                }
+                // 如果這行包含了剛剛抓到的 Email 或手機，絕對不是名字，直接跳過
+                if (email && originalLine.includes(email)) continue;
+                if (phone && originalLine.replace(/[^\d]/g, "").includes(phone)) continue;
 
-                // 2. 找手機號碼 (暴力提取法)
-                if (!phone) {
-                    // 把這行裡面所有的「數字」跟「+」號全部抽出來連在一起，無視所有中英文和符號
-                    let digitStr = originalLine.replace(/[^\d\+]/g, "");
-                    
-                    // 將 886 替換回 09
-                    if (digitStr.includes("+8869")) digitStr = digitStr.replace("+8869", "09");
-                    if (digitStr.includes("8869")) digitStr = digitStr.replace("8869", "09");
-                    
-                    // 檢查有沒有連續 10 碼且是 09 開頭
-                    let phoneMatch = digitStr.match(/09\d{8}/);
-                    if (phoneMatch) {
-                        phone = phoneMatch[0]; // 直接取這完美的 10 碼
-                        continue;
-                    }
-                }
-
-                // 3. 找姓名 (嚴格長度與純淨度判斷)
                 if (!name) {
-                    // 名字那行通常不會有數字，有數字直接跳過 (過濾掉日期、統編、電話殘骸)
-                    if (/\d/.test(originalLine)) continue;
+                    if (/\d/.test(originalLine)) continue; // 名字行不能有數字
 
-                    // 檢查黑名單
                     let hasExcludedWord = excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()));
                     if (hasExcludedWord) continue;
 
-                    // 把這行所有的中文抽出來
                     let pureChinese = originalLine.replace(/[^\u4e00-\u9fa5]/g, "");
-                    
-                    // 條件 A：中文字數剛好 2~4 個
-                    // 條件 B：這行整體的長度不能太長 (小於 15 個字元，避免抓到公司標語)
-                    if (pureChinese.length >= 2 && pureChinese.length <= 4 && originalLine.length < 15) {
-                        name = pureChinese; // 只存乾淨的中文
-                    } else if (pureChinese.length === 0) {
-                        // 如果沒有中文，試著判斷純英文名
-                        let cleanEngLine = originalLine.replace(/[^\w\s]/g, "").trim();
-                        let words = cleanEngLine.split(/\s+/);
-                        // 英文名通常是 2~3 個單字組成，且整行不能太長
-                        if (words.length >= 2 && words.length <= 3 && cleanEngLine.length < 20) {
-                            name = cleanEngLine;
+                    let pureEnglish = originalLine.replace(/[^a-zA-Z\s]/g, "").trim();
+
+                    // 條件：必須是 2~4 個中文字，且整行總長度不能太長(小於12字，避免抓到地址殘骸)
+                    if (pureChinese.length >= 2 && pureChinese.length <= 4 && originalLine.length < 12) {
+                        name = pureChinese;
+                    } 
+                    // 條件：如果沒有中文，試著抓 2~3 個單字的英文名
+                    else if (pureChinese.length === 0) {
+                        let words = pureEnglish.split(/\s+/);
+                        if (words.length >= 2 && words.length <= 3 && originalLine.length < 15) {
+                            name = pureEnglish;
                         }
                     }
                 }
