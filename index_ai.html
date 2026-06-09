@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>雙引擎名片掃描器 (自動存檔版)</title>
+    <title>雙引擎名片掃描器 (全模型解鎖版)</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
@@ -114,14 +114,12 @@
         let currentImageData = null;
 
         window.onload = function() {
-            // 載入金鑰設定
             const savedKey = localStorage.getItem('geminiApiKey');
             if(savedKey) {
                 document.getElementById('apiKeyInput').value = savedKey;
                 verifyAndLoadModels();
             }
 
-            // 自動載入先前儲存的名片清單
             const storedCards = localStorage.getItem('mySavedBusinessCards');
             if(storedCards) {
                 try {
@@ -133,13 +131,11 @@
             }
         };
 
-        // 自動存檔寫入功能
         function persistDataToBrowser() {
             try {
                 localStorage.setItem('mySavedBusinessCards', JSON.stringify(savedCardsArray));
             } catch (e) {
-                alert("⚠️ 瀏覽器儲存空間已滿 (通常為 5MB)！建議您先「匯出備份檔」，然後刪除下方部分名片以釋放空間。");
-                console.error("Local Storage Quota Exceeded", e);
+                alert("⚠️ 瀏覽器儲存空間已滿！建議您先「匯出備份檔」，然後刪除下方部分名片以釋放空間。");
             }
         }
 
@@ -161,15 +157,18 @@
 
             try {
                 const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-                if (!response.ok) throw new Error("金鑰無效、過期或複製錯誤 (400/403)");
+                if (!response.ok) throw new Error("金鑰無效、過期或複製錯誤");
 
                 const data = await response.json();
+                
+                // 【核心升級】解鎖所有支援文字生成的 Gemini 模型，不再限制版本號
                 const validModels = data.models.filter(m => 
                     m.supportedGenerationMethods.includes("generateContent") && 
-                    (m.name.includes("gemini-1.5") || m.name.includes("gemini-2"))
+                    m.name.includes("gemini") && 
+                    !m.name.includes("embedding") // 排除不能看圖的 embedding 模型
                 );
 
-                if (validModels.length === 0) throw new Error("此金鑰沒有可用於圖片分析的模型權限");
+                if (validModels.length === 0) throw new Error("此金鑰沒有任何可用的模型權限");
 
                 selectDiv.innerHTML = "";
                 validModels.forEach(m => {
@@ -189,7 +188,7 @@
                 saveSelectedModel(); 
 
                 selectDiv.style.display = "block";
-                statusDiv.innerText = "✅ 驗證成功！請選擇想使用的模型，即可開始拍照。";
+                statusDiv.innerText = "✅ 驗證成功！若遇 503 錯誤，請從上方切換其他模型測試。";
                 statusDiv.style.color = "#34c759";
 
             } catch (err) {
@@ -238,15 +237,15 @@
 
         async function startScanProcess(imageData) {
             const apiKey = localStorage.getItem('geminiApiKey');
-            const selectedModel = localStorage.getItem('geminiModel') || "models/gemini-1.5-flash-latest"; 
+            const selectedModel = localStorage.getItem('geminiModel'); 
             
             scanBtn.disabled = true;
             resultCard.style.display = 'none';
             document.getElementById('fullTextContainer').style.display = 'none';
 
-            if (apiKey && apiKey.length > 10) {
+            if (apiKey && apiKey.length > 10 && selectedModel) {
                 try {
-                    status.innerText = "🧠 AI 正在理解名片內容，請稍候...";
+                    status.innerText = `🧠 AI (${selectedModel.split('/')[1]}) 正在理解名片內容...`;
                     await performAIOCR(imageData, apiKey, selectedModel);
                     status.style.color = "#34c759";
                     status.innerText = "✨ AI 辨識成功！請確認下方結果。";
@@ -257,7 +256,7 @@
                     status.innerText = `⚠️ AI 錯誤 (${error.message})，自動切換傳統模式...`;
                 }
             } else {
-                status.innerText = "⏳ 未設定有效金鑰，直接啟用傳統辨識模式...";
+                status.innerText = "⏳ 未設定金鑰或未選擇模型，直接啟用傳統辨識模式...";
             }
 
             try {
@@ -376,8 +375,6 @@
             if (!name && !phone && !email) { alert("至少需要填寫一項資料！"); return; }
             
             savedCardsArray.push({ name, phone, email, imageData: currentImageData });
-            
-            // 觸發自動存檔
             persistDataToBrowser();
             
             resultCard.style.display = 'none';
