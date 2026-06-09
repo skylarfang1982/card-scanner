@@ -13,9 +13,11 @@
         #cameraInput { display: none; }
         #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
         #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; }
-        .result-item { margin-bottom: 10px; }
-        .result-label { font-size: 12px; color: #888; text-transform: uppercase; }
-        .result-value { font-size: 18px; font-weight: 500; }
+        .result-item { margin-bottom: 15px; }
+        .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
+        /* 改為輸入框樣式，方便手動修改 */
+        .result-input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; background-color: #fafafa; }
+        .result-input:focus { outline: none; border-color: #007aff; background-color: #fff; }
     </style>
 </head>
 <body>
@@ -29,23 +31,23 @@
     </div>
 
     <div class="card" id="resultCard" style="display: none;">
-        <h3>辨識結果</h3>
+        <h3>辨識結果 (可點擊修改)</h3>
         <div class="result-item">
-            <div class="result-label">名稱 / 公司</div>
-            <div class="result-value" id="resName">-</div>
+            <div class="result-label">名稱 / 姓名</div>
+            <input type="text" class="result-input" id="resName" placeholder="請確認或手動輸入姓名">
         </div>
         <div class="result-item">
             <div class="result-label">手機</div>
-            <div class="result-value" id="resPhone">-</div>
+            <input type="tel" class="result-input" id="resPhone" placeholder="未找到手機號碼">
         </div>
         <div class="result-item">
             <div class="result-label">Email</div>
-            <div class="result-value" id="resEmail">-</div>
+            <input type="email" class="result-input" id="resEmail" placeholder="未找到信箱">
         </div>
-        <hr>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
         <div class="result-item">
-            <div class="result-label">完整文字</div>
-            <div class="result-value" style="font-size: 14px; white-space: pre-wrap;" id="resFullText">-</div>
+            <div class="result-label">原始完整文字 (參考用)</div>
+            <div style="font-size: 14px; color: #555; white-space: pre-wrap; background: #f0f0f0; padding: 10px; border-radius: 6px;" id="resFullText">-</div>
         </div>
     </div>
 
@@ -81,7 +83,7 @@
                 const text = ret.data.text;
                 await worker.terminate();
                 
-                status.innerText = "✅ 掃描完成！";
+                status.innerText = "✅ 掃描完成！請確認下方資料。";
                 parseText(text);
 
             } catch (error) {
@@ -92,7 +94,6 @@
             }
         }
 
-        // 解析文字邏輯 (升級版)
         function parseText(text) {
             let name = "";
             let phone = "";
@@ -100,8 +101,6 @@
 
             const lines = text.split('\n');
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-
-            // 建立「排除關鍵字」，避免把公司、職稱或地址當作名字
             const excludeWords = ["公司", "企業", "實業", "科技", "設計", "工作室", "股份", "有限", "大學", "協會", "中心", "部門", "業務", "經理", "總監", "工程師", "專員", "負責人", "董事", "代表", "地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www"];
 
             for (let line of lines) {
@@ -114,13 +113,15 @@
                     continue; 
                 }
 
-                // 2. 找手機號碼 (09 開頭 或 8869 開頭)
+                // 2. 找手機號碼 (嚴格鎖定 09 或 8869 開頭的獨立數字串)
                 if (!phone) {
+                    // 拔除所有空白、括號、短橫線
                     let cleanStr = originalLine.replace(/[\s\-\(\)]/g, "");
-                    let phoneMatch = cleanStr.match(/(?:09|\+?8869)\d{8}/);
+                    // 確保它不是夾在其他數字中間 (例如統編+手機連在一起)
+                    let phoneMatch = cleanStr.match(/(?:^|[^\d])(09\d{8}|8869\d{8}|\+8869\d{8})(?:[^\d]|$)/);
                     
                     if (phoneMatch) {
-                        phone = phoneMatch[0];
+                        phone = phoneMatch[1]; // 取出括號內捕捉到的號碼
                         if (phone.includes("886")) {
                             phone = phone.replace(/\+?886/, "0");
                         }
@@ -128,35 +129,17 @@
                     }
                 }
 
-                // 3. 找姓名 
+                // 3. 找姓名 (先清理亂碼與符號)
                 if (!name) {
-                    let noSpaceLine = originalLine.replace(/\s+/g, "");
+                    // 如果這行有數字，通常不是名字，直接跳過
+                    if (/\d/.test(originalLine)) continue;
 
-                    // 條件 A：不能包含任何數字
-                    if (/\d/.test(noSpaceLine)) continue;
-
-                    // 條件 B：不能包含排除關鍵字 (黑名單)
+                    // 檢查黑名單
                     let hasExcludedWord = excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()));
                     if (hasExcludedWord) continue;
 
-                    // 條件 C：判斷是否為中文名 (純中文 2~4 個字) 或英文名 (2~3 個英文單字組成)
-                    let isChineseName = /^[\u4e00-\u9fa5]{2,4}$/.test(noSpaceLine);
-                    let isEnglishName = /^[a-zA-Z]+(\s[a-zA-Z]+){1,2}$/.test(originalLine);
+                    // 【關鍵升級】把所有標點符號、雜訊清掉，只留中文和英文
+                    let pureText = originalLine.replace(/[^\u4e00-\u9fa5a-zA-Z]/g, "");
 
-                    if (isChineseName || isEnglishName) {
-                        name = originalLine;
-                    }
-                }
-            }
-
-            // 更新 UI
-            document.getElementById('resName').innerText = name || "無法確認";
-            document.getElementById('resPhone').innerText = phone || "未找到手機";
-            document.getElementById('resEmail').innerText = email || "未找到信箱";
-            document.getElementById('resFullText').innerText = text;
-            
-            resultCard.style.display = 'block';
-        }
-    </script>
-</body>
-</html>
+                    // 判斷是否為 2~4 個字的純中文
+                    let isChineseName = /^[\u4
