@@ -35,7 +35,7 @@
             <div class="result-value" id="resName">-</div>
         </div>
         <div class="result-item">
-            <div class="result-label">電話</div>
+            <div class="result-label">手機</div>
             <div class="result-value" id="resPhone">-</div>
         </div>
         <div class="result-item">
@@ -56,12 +56,9 @@
         const scanBtn = document.getElementById('scanBtn');
         const resultCard = document.getElementById('resultCard');
 
-        // 監聽相機拍照或圖片上傳
         cameraInput.addEventListener('change', function(e) {
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
-                
-                // 顯示預覽圖
                 const reader = new FileReader();
                 reader.onload = function(event) {
                     preview.src = event.target.result;
@@ -72,20 +69,16 @@
             }
         });
 
-        // 執行 OCR 辨識
         async function performOCR(imageData) {
             scanBtn.disabled = true;
             resultCard.style.display = 'none';
             status.innerText = "⏳ 正在載入辨識引擎與語言包 (初次載入需較久)...";
 
             try {
-                // chi_tra 為繁體中文，eng 為英文
                 const worker = await Tesseract.createWorker('chi_tra+eng');
-                
                 status.innerText = "🔍 正在掃描文字中...";
                 const ret = await worker.recognize(imageData);
                 const text = ret.data.text;
-                
                 await worker.terminate();
                 
                 status.innerText = "✅ 掃描完成！";
@@ -99,7 +92,7 @@
             }
         }
 
-        // 解析文字邏輯 (簡易版)
+        // 解析文字邏輯 (升級版)
         function parseText(text) {
             let name = "";
             let phone = "";
@@ -107,30 +100,59 @@
 
             const lines = text.split('\n');
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
-            const phoneRegex = /[0-9\-\+\(\)\s]{8,}/;
+
+            // 建立「排除關鍵字」，避免把公司、職稱或地址當作名字
+            const excludeWords = ["公司", "企業", "實業", "科技", "設計", "工作室", "股份", "有限", "大學", "協會", "中心", "部門", "業務", "經理", "總監", "工程師", "專員", "負責人", "董事", "代表", "地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www"];
 
             for (let line of lines) {
-                line = line.trim();
-                if (!line) continue;
+                let originalLine = line.trim();
+                if (!originalLine) continue;
 
-                // 找信箱
-                if (!email && emailRegex.test(line)) {
-                    email = line.match(emailRegex)[0];
+                // 1. 找信箱
+                if (!email && emailRegex.test(originalLine)) {
+                    email = originalLine.match(emailRegex)[0];
+                    continue; 
                 }
-                // 找電話 (排除日期或統編的誤判，這裡做簡單處理)
-                else if (!phone && phoneRegex.test(line) && /\d{4}/.test(line)) {
-                    phone = line;
+
+                // 2. 找手機號碼 (09 開頭 或 8869 開頭)
+                if (!phone) {
+                    let cleanStr = originalLine.replace(/[\s\-\(\)]/g, "");
+                    let phoneMatch = cleanStr.match(/(?:09|\+?8869)\d{8}/);
+                    
+                    if (phoneMatch) {
+                        phone = phoneMatch[0];
+                        if (phone.includes("886")) {
+                            phone = phone.replace(/\+?886/, "0");
+                        }
+                        continue;
+                    }
                 }
-                // 將第一行非空白文字當作名字
-                else if (!name) {
-                    name = line;
+
+                // 3. 找姓名 
+                if (!name) {
+                    let noSpaceLine = originalLine.replace(/\s+/g, "");
+
+                    // 條件 A：不能包含任何數字
+                    if (/\d/.test(noSpaceLine)) continue;
+
+                    // 條件 B：不能包含排除關鍵字 (黑名單)
+                    let hasExcludedWord = excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()));
+                    if (hasExcludedWord) continue;
+
+                    // 條件 C：判斷是否為中文名 (純中文 2~4 個字) 或英文名 (2~3 個英文單字組成)
+                    let isChineseName = /^[\u4e00-\u9fa5]{2,4}$/.test(noSpaceLine);
+                    let isEnglishName = /^[a-zA-Z]+(\s[a-zA-Z]+){1,2}$/.test(originalLine);
+
+                    if (isChineseName || isEnglishName) {
+                        name = originalLine;
+                    }
                 }
             }
 
             // 更新 UI
-            document.getElementById('resName').innerText = name || "無法辨識";
-            document.getElementById('resPhone').innerText = phone || "無法辨識";
-            document.getElementById('resEmail').innerText = email || "無法辨識";
+            document.getElementById('resName').innerText = name || "無法確認";
+            document.getElementById('resPhone').innerText = phone || "未找到手機";
+            document.getElementById('resEmail').innerText = email || "未找到信箱";
             document.getElementById('resFullText').innerText = text;
             
             resultCard.style.display = 'block';
