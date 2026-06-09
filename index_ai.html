@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI 名片掃描器</title>
+    <title>雙引擎名片掃描器</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
         .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
@@ -32,13 +33,13 @@
 <body>
 
     <div class="card" id="settingsCard">
-        <h3>⚙️ AI 引擎設定 (首次使用需設定)</h3>
-        <input type="password" class="result-input" id="apiKeyInput" placeholder="請貼上你的 Gemini API Key" onchange="saveApiKey()">
-        <div style="font-size: 12px; color: #888; margin-top: 8px;">只需輸入一次，金鑰會安全保存在你的手機瀏覽器中。</div>
+        <h3>⚙️ AI 引擎設定 (選填)</h3>
+        <input type="password" class="result-input" id="apiKeyInput" placeholder="請貼上你的 Gemini API Key (不填則使用傳統辨識)" onchange="saveApiKey()">
+        <div style="font-size: 12px; color: #888; margin-top: 8px;">有金鑰會啟動 AI 智能分析，若無金鑰或 AI 故障，系統會自動切換為傳統掃描。</div>
     </div>
 
     <div class="card">
-        <h2>🧠 AI 名片掃描</h2>
+        <h2>📷 雙引擎名片掃描</h2>
         <input type="file" accept="image/*" capture="environment" id="cameraInput">
         <button class="btn" id="scanBtn" onclick="document.getElementById('cameraInput').click()">拍照或上傳名片</button>
         <img id="preview" alt="名片預覽">
@@ -49,17 +50,23 @@
         <h3>✏️ 檢查與修改</h3>
         <div class="result-item">
             <div class="result-label">名稱 / 姓名</div>
-            <input type="text" class="result-input" id="resName" placeholder="AI 正在分析...">
+            <input type="text" class="result-input" id="resName" placeholder="辨識中...">
         </div>
         <div class="result-item">
             <div class="result-label">手機</div>
-            <input type="tel" class="result-input" id="resPhone" placeholder="AI 正在分析...">
+            <input type="tel" class="result-input" id="resPhone" placeholder="辨識中...">
         </div>
         <div class="result-item">
             <div class="result-label">Email</div>
-            <input type="email" class="result-input" id="resEmail" placeholder="AI 正在分析...">
+            <input type="email" class="result-input" id="resEmail" placeholder="辨識中...">
         </div>
         <button class="btn btn-save" onclick="saveCurrentCard()">💾 儲存這筆名片</button>
+        
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+        <div class="result-item" id="fullTextContainer" style="display: none;">
+            <div class="result-label">傳統引擎原始文字 (參考用)</div>
+            <div style="font-size: 14px; color: #555; white-space: pre-wrap; background: #f0f0f0; padding: 10px; border-radius: 6px;" id="resFullText">-</div>
+        </div>
     </div>
 
     <div class="card" id="savedContainer" style="display: none;">
@@ -89,7 +96,6 @@
         let savedCardsArray = [];
         let currentImageData = null;
 
-        // 載入網頁時，檢查是否有存過 API Key 並載入清單
         window.onload = function() {
             const savedKey = localStorage.getItem('geminiApiKey');
             if(savedKey) {
@@ -111,31 +117,54 @@
                     currentImageData = event.target.result;
                     preview.src = currentImageData;
                     preview.style.display = 'block';
-                    performAIOCR(currentImageData);
+                    startScanProcess(currentImageData); // 啟動智能分流
                 }
                 reader.readAsDataURL(file);
             }
         });
 
-        // --- 核心升級：呼叫 Gemini AI 視覺模型 ---
-        async function performAIOCR(imageData) {
+        // 核心切換邏輯：先試 AI，失敗就用傳統
+        async function startScanProcess(imageData) {
             const apiKey = localStorage.getItem('geminiApiKey');
-            if (!apiKey) {
-                alert("請先在上方設定區輸入你的 Gemini API 金鑰！");
-                return;
-            }
-
             scanBtn.disabled = true;
             resultCard.style.display = 'none';
-            status.innerText = "🧠 AI 正在理解名片內容，請稍候...";
+            document.getElementById('fullTextContainer').style.display = 'none';
 
+            if (apiKey && apiKey.length > 10) {
+                try {
+                    status.innerText = "🧠 AI 正在理解名片內容，請稍候...";
+                    await performAIOCR(imageData, apiKey);
+                    status.innerText = "✨ AI 辨識完成！請確認下方結果。";
+                    return; // AI 成功，提早結束
+                } catch (error) {
+                    console.warn("AI 發生錯誤，切換備用方案:", error);
+                    status.style.color = "#ff9500";
+                    status.innerText = "⚠️ AI 暫時無效，正在切換為傳統備用辨識模式...";
+                }
+            } else {
+                status.innerText = "⏳ 未設定有效金鑰，直接啟用傳統辨識模式...";
+            }
+
+            // 如果沒有金鑰，或是 AI 拋出錯誤，就會執行到這裡：啟動傳統引擎
             try {
-                // 將圖片轉換為 AI 要求的格式
-                const base64Data = imageData.split(',')[1];
-                const mimeType = imageData.split(';')[0].split(':')[1];
+                await performTraditionalOCR(imageData);
+                status.style.color = "#666";
+                status.innerText = "✅ 傳統掃描完成！請在下方檢查並儲存。";
+            } catch (err) {
+                console.error(err);
+                status.style.color = "red";
+                status.innerText = "❌ 兩種引擎皆辨識失敗，請重新拍攝。";
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
 
-                // 給 AI 的指令 (Prompt)
-                const promptText = `你現在是一個專業的名片資料整理助理。
+        // --- 引擎 A：Gemini AI 視覺辨識 ---
+        async function performAIOCR(imageData, apiKey) {
+            const base64Data = imageData.split(',')[1];
+            const mimeType = imageData.split(';')[0].split(':')[1];
+
+            const promptText = `你現在是一個專業的名片資料整理助理。
 請看這張名片圖片，並提取以下 3 個欄位：
 1. name: 名片上的「人名」(請忽略職稱、公司名或地址)
 2. phone: 台灣手機號碼 (請整理成 09 開頭的 10 碼數字，例如 0912345678。如果有市話請忽略，以手機優先)
@@ -145,57 +174,105 @@
 範例格式：
 {"name": "王小明", "phone": "0912345678", "email": "test@example.com"}`;
 
-                const requestBody = {
-                    contents: [{
-                        parts: [
-                            { text: promptText },
-                            { inline_data: { mime_type: mimeType, data: base64Data } }
-                        ]
-                    }],
-                    generationConfig: {
-                        temperature: 0.1 // 降低溫度，讓 AI 專注於精確的事實提取
-                    }
-                };
+            const requestBody = {
+                contents: [{
+                    parts: [
+                        { text: promptText },
+                        { inline_data: { mime_type: mimeType, data: base64Data } }
+                    ]
+                }],
+                generationConfig: { temperature: 0.1 }
+            };
 
-                // 發送請求給 Google Gemini API
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody)
-                });
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
 
-                if (!response.ok) {
-                    throw new Error("API 請求失敗，請檢查金鑰是否正確填寫。");
-                }
+            if (!response.ok) throw new Error("API 回應錯誤");
 
-                const result = await response.json();
-                let aiResponseText = result.candidates[0].content.parts[0].text;
-                
-                // 清理 AI 可能回傳的 Markdown 標記
-                aiResponseText = aiResponseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-                
-                // 解析 JSON
-                const parsedData = JSON.parse(aiResponseText);
+            const result = await response.json();
+            if(!result.candidates) throw new Error("無效的 AI 回應");
 
-                status.innerText = "✨ AI 辨識完成！請確認下方結果。";
-                
-                // 自動填入欄位
-                document.getElementById('resName').value = parsedData.name || "";
-                document.getElementById('resPhone').value = parsedData.phone || "";
-                document.getElementById('resEmail').value = parsedData.email || "";
-                
-                resultCard.style.display = 'block';
+            let aiResponseText = result.candidates[0].content.parts[0].text;
+            aiResponseText = aiResponseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            const parsedData = JSON.parse(aiResponseText);
 
-            } catch (error) {
-                console.error(error);
-                status.innerText = "❌ AI 辨識失敗，請確認 API 金鑰是否有效或網路狀況。";
-            } finally {
-                scanBtn.disabled = false;
-            }
+            document.getElementById('resName').value = parsedData.name || "";
+            document.getElementById('resPhone').value = parsedData.phone || "";
+            document.getElementById('resEmail').value = parsedData.email || "";
+            
+            resultCard.style.display = 'block';
+            scanBtn.disabled = false;
         }
 
-        // --- 以下為原本的儲存、備份與還原邏輯 (完全保留) ---
+        // --- 引擎 B：傳統 Tesseract 無敵過濾版 ---
+        async function performTraditionalOCR(imageData) {
+            const worker = await Tesseract.createWorker('chi_tra+eng');
+            const ret = await worker.recognize(imageData);
+            const text = ret.data.text;
+            await worker.terminate();
+            
+            let name = "";
+            let phone = "";
+            let email = "";
 
+            const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+            let emailMatch = text.match(emailRegex);
+            if (emailMatch) email = emailMatch[0];
+
+            const phoneRegex = /(?:09|\+?886\s*9)(?:[\s\-]*\d){8}/g;
+            let phoneMatches = text.match(phoneRegex);
+            if (phoneMatches) {
+                for (let p of phoneMatches) {
+                    let cleanP = p.replace(/[^\d]/g, "");
+                    if (cleanP.startsWith("8869")) cleanP = "0" + cleanP.substring(3);
+                    if (cleanP.length >= 10 && cleanP.startsWith("09")) {
+                        phone = cleanP.substring(0, 10);
+                        break;
+                    }
+                }
+            }
+
+            const lines = text.split('\n');
+            const excludeWords = ["公司", "企業", "實業", "科技", "設計", "工作室", "股份", "有限", "大學", "協會", "中心", "部門", "業務", "經理", "總監", "工程師", "專員", "負責人", "董事", "代表", "地址", "電話", "手機", "傳真", "統編", "路", "街", "段", "巷", "弄", "樓", "號", "Tel", "Fax", "Mobile", "Email", "Web", ".com", "www", "市", "區", "縣", "鄉", "鎮", "先生", "小姐"];
+
+            for (let line of lines) {
+                let originalLine = line.trim();
+                if (!originalLine) continue;
+                if (email && originalLine.includes(email)) continue;
+                if (phone && originalLine.replace(/[^\d]/g, "").includes(phone)) continue;
+
+                if (!name) {
+                    if (/\d/.test(originalLine)) continue;
+                    let hasExcludedWord = excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()));
+                    if (hasExcludedWord) continue;
+
+                    let pureChinese = originalLine.replace(/[^\u4e00-\u9fa5]/g, "");
+                    let pureEnglish = originalLine.replace(/[^a-zA-Z\s]/g, "").trim();
+
+                    if (pureChinese.length >= 2 && pureChinese.length <= 4 && originalLine.length < 12) {
+                        name = pureChinese;
+                    } else if (pureChinese.length === 0) {
+                        let words = pureEnglish.split(/\s+/);
+                        if (words.length >= 2 && words.length <= 3 && originalLine.length < 15) {
+                            name = pureEnglish;
+                        }
+                    }
+                }
+            }
+
+            document.getElementById('resName').value = name;
+            document.getElementById('resPhone').value = phone;
+            document.getElementById('resEmail').value = email;
+            
+            document.getElementById('resFullText').innerText = text;
+            document.getElementById('fullTextContainer').style.display = 'block'; // 只有傳統模式會顯示原始雜亂文字
+            resultCard.style.display = 'block';
+        }
+
+        // --- 儲存與清單邏輯 ---
         function saveCurrentCard() {
             const name = document.getElementById('resName').value.trim();
             const phone = document.getElementById('resPhone').value.trim();
@@ -207,9 +284,9 @@
             }
 
             savedCardsArray.push({ name, phone, email, imageData: currentImageData });
-            
             resultCard.style.display = 'none';
             preview.style.display = 'none';
+            status.style.color = "#666";
             status.innerText = "✅ 儲存成功！您可以繼續拍下一張。";
             renderSavedCards();
         }
@@ -217,15 +294,12 @@
         function renderSavedCards() {
             const container = document.getElementById('savedContainer');
             const list = document.getElementById('savedCardsList');
-            
             if (savedCardsArray.length === 0) {
                 container.style.display = 'none';
                 return;
             }
-            
             container.style.display = 'block';
             list.innerHTML = ""; 
-            
             savedCardsArray.forEach((card, index) => {
                 const cardHtml = `
                     <div class="saved-item">
