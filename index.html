@@ -12,6 +12,11 @@
         .btn:disabled { background: #ccc; }
         .btn-save { background: #34c759; }
         .btn-delete { background: #ff3b30; padding: 8px 12px; font-size: 14px; display: inline-block; width: auto; margin: 0; }
+        
+        /* 備份按鈕專用顏色 */
+        .btn-export { background: #ff9500; }
+        .btn-import { background: #5856d6; }
+
         #cameraInput { display: none; }
         #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
         #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; }
@@ -19,14 +24,9 @@
         .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
         .result-input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; background-color: #fafafa; }
         .result-input:focus { outline: none; border-color: #007aff; background-color: #fff; }
-        
-        /* 儲存清單樣式 */
         .saved-item { background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #007aff; display: flex; justify-content: space-between; align-items: center; }
         .saved-info { font-size: 15px; line-height: 1.5; color: #333; }
-        /* 讓名字變成可點擊的藍色連結樣式 */
         .clickable-name { font-size: 18px; display: block; margin-bottom: 4px; color: #007aff; text-decoration: underline; cursor: pointer; }
-        
-        /* 圖片放大的彈出視窗 (Modal) */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }
         .modal-content { margin: auto; display: block; max-width: 95%; max-height: 80vh; margin-top: 15vh; border-radius: 8px; object-fit: contain; }
         .close { position: absolute; top: 20px; right: 25px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; }
@@ -69,6 +69,16 @@
         <div id="savedCardsList"></div>
     </div>
 
+    <div class="card">
+        <h3>💾 資料備份與還原</h3>
+        <p style="font-size: 14px; color: #666; margin-bottom: 15px;">將目前的清單與照片下載到手機保存，下次開啟網頁時可隨時匯入恢復。</p>
+        
+        <button class="btn btn-export" onclick="exportBackup()">⬇️ 匯出備份檔 (.json)</button>
+        
+        <input type="file" id="importInput" accept=".json" style="display: none;" onchange="importBackup(event)">
+        <button class="btn btn-import" onclick="document.getElementById('importInput').click()">⬆️ 匯入備份檔</button>
+    </div>
+
     <div id="imageModal" class="modal">
         <span class="close" onclick="closeModal()">&times;</span>
         <img class="modal-content" id="modalImg">
@@ -82,14 +92,14 @@
         const resultCard = document.getElementById('resultCard');
         
         let savedCardsArray = [];
-        let currentImageData = null; // 用來暫存當前拍下的照片資料
+        let currentImageData = null;
 
         cameraInput.addEventListener('change', function(e) {
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
                 const reader = new FileReader();
                 reader.onload = function(event) {
-                    currentImageData = event.target.result; // 把照片存進變數
+                    currentImageData = event.target.result;
                     preview.src = currentImageData;
                     preview.style.display = 'block';
                     performOCR(currentImageData);
@@ -194,7 +204,6 @@
                 return;
             }
 
-            // 儲存時，把剛剛拍的照片 (currentImageData) 一起存進去
             savedCardsArray.push({ name, phone, email, imageData: currentImageData });
             
             resultCard.style.display = 'none';
@@ -239,12 +248,9 @@
             }
         }
 
-        // --- 圖片預覽功能 ---
         function viewImage(index) {
             const modal = document.getElementById("imageModal");
             const modalImg = document.getElementById("modalImg");
-            
-            // 將對應名片的照片載入並顯示彈出視窗
             modalImg.src = savedCardsArray[index].imageData;
             modal.style.display = "block";
         }
@@ -252,6 +258,57 @@
         function closeModal() {
             const modal = document.getElementById("imageModal");
             modal.style.display = "none";
+        }
+
+        // --- 新增：匯出備份功能 ---
+        function exportBackup() {
+            if (savedCardsArray.length === 0) {
+                alert("目前沒有任何名片可以備份喔！");
+                return;
+            }
+            // 將陣列轉換成 JSON 字串
+            const dataStr = JSON.stringify(savedCardsArray);
+            // 建立一個 Blob 物件
+            const blob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            
+            // 建立一個隱藏的下載連結並觸發點擊
+            const a = document.createElement("a");
+            a.href = url;
+            // 設定下載的檔名，包含今天的日期
+            const dateStr = new Date().toISOString().slice(0,10);
+            a.download = `名片備份_${dateStr}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // --- 新增：匯入備份功能 ---
+        function importBackup(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    // 簡單檢查格式是否為陣列
+                    if (Array.isArray(importedData)) {
+                        // 將匯入的資料加到現有的清單後面
+                        savedCardsArray = savedCardsArray.concat(importedData);
+                        renderSavedCards();
+                        alert(`成功匯入 ${importedData.length} 筆名片資料與照片！`);
+                    } else {
+                        alert("備份檔格式不正確，請確認檔案。");
+                    }
+                } catch (error) {
+                    alert("讀取備份檔失敗，檔案可能已損毀。");
+                }
+                // 清空 input 的值，這樣就算連續匯入同一個檔案也會觸發
+                event.target.value = '';
+            };
+            reader.readAsText(file);
         }
     </script>
 </body>
