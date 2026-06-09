@@ -8,16 +8,22 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
         .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .btn { display: block; width: 100%; padding: 15px; background: #007aff; color: white; text-align: center; border-radius: 8px; text-decoration: none; font-size: 18px; font-weight: bold; cursor: pointer; border: none; }
+        .btn { display: block; width: 100%; padding: 15px; background: #007aff; color: white; text-align: center; border-radius: 8px; text-decoration: none; font-size: 18px; font-weight: bold; cursor: pointer; border: none; margin-bottom: 10px; }
         .btn:disabled { background: #ccc; }
+        .btn-save { background: #34c759; }
+        .btn-delete { background: #ff3b30; padding: 8px 12px; font-size: 14px; display: inline-block; width: auto; margin: 0; }
         #cameraInput { display: none; }
         #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
         #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; }
         .result-item { margin-bottom: 15px; }
         .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
-        /* 改為輸入框樣式，方便手動修改 */
         .result-input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; background-color: #fafafa; }
         .result-input:focus { outline: none; border-color: #007aff; background-color: #fff; }
+        
+        /* 儲存清單的樣式 */
+        .saved-item { background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #007aff; display: flex; justify-content: space-between; align-items: center; }
+        .saved-info { font-size: 15px; line-height: 1.5; color: #333; }
+        .saved-info strong { font-size: 18px; display: block; margin-bottom: 4px; }
     </style>
 </head>
 <body>
@@ -31,7 +37,7 @@
     </div>
 
     <div class="card" id="resultCard" style="display: none;">
-        <h3>辨識結果 (可點擊修改)</h3>
+        <h3>✏️ 檢查與修改</h3>
         <div class="result-item">
             <div class="result-label">名稱 / 姓名</div>
             <input type="text" class="result-input" id="resName" placeholder="請確認或手動輸入姓名">
@@ -44,11 +50,19 @@
             <div class="result-label">Email</div>
             <input type="email" class="result-input" id="resEmail" placeholder="未找到信箱">
         </div>
+        
+        <button class="btn btn-save" onclick="saveCurrentCard()">💾 儲存這筆名片</button>
+
         <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
         <div class="result-item">
             <div class="result-label">原始完整文字 (參考用)</div>
             <div style="font-size: 14px; color: #555; white-space: pre-wrap; background: #f0f0f0; padding: 10px; border-radius: 6px;" id="resFullText">-</div>
         </div>
+    </div>
+
+    <div class="card" id="savedContainer" style="display: none;">
+        <h3>📂 已儲存名片清單</h3>
+        <div id="savedCardsList"></div>
     </div>
 
     <script>
@@ -57,6 +71,9 @@
         const status = document.getElementById('status');
         const scanBtn = document.getElementById('scanBtn');
         const resultCard = document.getElementById('resultCard');
+        
+        // 用來存放已儲存名片的陣列
+        let savedCardsArray = [];
 
         cameraInput.addEventListener('change', function(e) {
             if (e.target.files && e.target.files[0]) {
@@ -74,7 +91,7 @@
         async function performOCR(imageData) {
             scanBtn.disabled = true;
             resultCard.style.display = 'none';
-            status.innerText = "⏳ 正在載入辨識引擎與語言包 (初次載入需較久)...";
+            status.innerText = "⏳ 正在載入辨識引擎與語言包...";
 
             try {
                 const worker = await Tesseract.createWorker('chi_tra+eng');
@@ -83,7 +100,7 @@
                 const text = ret.data.text;
                 await worker.terminate();
                 
-                status.innerText = "✅ 掃描完成！請確認下方資料。";
+                status.innerText = "✅ 掃描完成！請在下方檢查並儲存。";
                 parseText(text);
 
             } catch (error) {
@@ -113,55 +130,119 @@
                     continue; 
                 }
 
-                // 2. 找手機號碼 (嚴格鎖定 09 或 8869 開頭的獨立數字串)
+                // 2. 找手機號碼 (支援含有 - 的格式)
                 if (!phone) {
-                    // 拔除所有空白、括號、短橫線
-                    let cleanStr = originalLine.replace(/[\s\-\(\)]/g, "");
-                    // 確保它不是夾在其他數字中間 (例如統編+手機連在一起)
-                    let phoneMatch = cleanStr.match(/(?:^|[^\d])(09\d{8}|8869\d{8}|\+8869\d{8})(?:[^\d]|$)/);
-                    
+                    // 尋找包含 09 或 8869 開頭，後面跟著數字、空白或短橫線的字串
+                    let phoneMatch = originalLine.match(/(?:09|\+?886\s*9)[\d\s\-]{8,}/);
                     if (phoneMatch) {
-                        phone = phoneMatch[1]; // 取出括號內捕捉到的號碼
-                        if (phone.includes("886")) {
-                            phone = phone.replace(/\+?886/, "0");
+                        // 把抓出來的字串裡面所有非數字清掉
+                        let digitsOnly = phoneMatch[0].replace(/\D/g, "");
+                        
+                        if (digitsOnly.startsWith("8869")) {
+                            digitsOnly = "0" + digitsOnly.substring(3);
                         }
-                        continue;
+                        
+                        // 確保長度足夠，只取前 10 碼避免抓到分機
+                        if (digitsOnly.length >= 10 && digitsOnly.startsWith("09")) {
+                            phone = digitsOnly.substring(0, 10);
+                            continue;
+                        }
                     }
                 }
 
-                // 3. 找姓名 (先清理亂碼與符號)
+                // 3. 找姓名 (強化中文辨識)
                 if (!name) {
-                    // 如果這行有數字，通常不是名字，直接跳過
                     if (/\d/.test(originalLine)) continue;
 
-                    // 檢查黑名單
                     let hasExcludedWord = excludeWords.some(keyword => originalLine.toLowerCase().includes(keyword.toLowerCase()));
                     if (hasExcludedWord) continue;
 
-                    // 【關鍵升級】把所有標點符號、雜訊清掉，只留中文和英文
-                    let pureText = originalLine.replace(/[^\u4e00-\u9fa5a-zA-Z]/g, "");
+                    // 單純把這行裡面的「中文字」全部撈出來拼在一起
+                    let chineseChars = originalLine.match(/[\u4e00-\u9fa5]/g);
+                    let isChineseName = false;
+                    
+                    // 如果這行剛好有 2 到 4 個中文字，就認定它是中文名
+                    if (chineseChars && chineseChars.length >= 2 && chineseChars.length <= 4) {
+                        isChineseName = true;
+                    }
 
-                    // 判斷是否為 2~4 個字的純中文
-                    let isChineseName = /^[\u4e00-\u9fa5]{2,4}$/.test(pureText);
-                    // 判斷是否為 2~3 個英文單字 (允許保留原本的空白)
                     let cleanEngLine = originalLine.replace(/[^\w\s]/g, "").trim();
                     let isEnglishName = /^[a-zA-Z]+(\s[a-zA-Z]+){1,2}$/.test(cleanEngLine);
 
                     if (isChineseName) {
-                        name = pureText; // 存入乾淨無亂碼的中文
+                        name = chineseChars.join(""); // 用 join("") 把陣列組回乾淨的純中文
                     } else if (isEnglishName) {
-                        name = cleanEngLine; // 存入乾淨無亂碼的英文
+                        name = cleanEngLine;
                     }
                 }
             }
 
-            // 更新 UI 的輸入框數值
+            // 更新 UI
             document.getElementById('resName').value = name;
             document.getElementById('resPhone').value = phone;
             document.getElementById('resEmail').value = email;
             document.getElementById('resFullText').innerText = text;
             
             resultCard.style.display = 'block';
+        }
+
+        // 儲存目前卡片資料到陣列中
+        function saveCurrentCard() {
+            const name = document.getElementById('resName').value.trim();
+            const phone = document.getElementById('resPhone').value.trim();
+            const email = document.getElementById('resEmail').value.trim();
+
+            if (!name && !phone && !email) {
+                alert("至少需要填寫一項資料才能儲存喔！");
+                return;
+            }
+
+            // 加入陣列
+            savedCardsArray.push({ name, phone, email });
+            
+            // 隱藏目前的編輯區，準備下一張
+            resultCard.style.display = 'none';
+            preview.style.display = 'none';
+            status.innerText = "✅ 儲存成功！您可以繼續拍下一張。";
+            
+            // 更新下方清單
+            renderSavedCards();
+        }
+
+        // 渲染已儲存清單的畫面
+        function renderSavedCards() {
+            const container = document.getElementById('savedContainer');
+            const list = document.getElementById('savedCardsList');
+            
+            if (savedCardsArray.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'block';
+            list.innerHTML = ""; // 清空後重新渲染
+            
+            savedCardsArray.forEach((card, index) => {
+                const cardHtml = `
+                    <div class="saved-item">
+                        <div class="saved-info">
+                            <strong>${card.name || '未輸入姓名'}</strong>
+                            📱 ${card.phone || '無手機'}<br>
+                            ✉️ ${card.email || '無信箱'}
+                        </div>
+                        <button class="btn btn-delete" onclick="deleteCard(${index})">刪除</button>
+                    </div>
+                `;
+                list.innerHTML += cardHtml;
+            });
+        }
+
+        // 刪除特定名片
+        function deleteCard(index) {
+            if(confirm("確定要刪除這筆資料嗎？")) {
+                savedCardsArray.splice(index, 1);
+                renderSavedCards();
+            }
         }
     </script>
 </body>
