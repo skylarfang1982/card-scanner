@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI 名片掃描器</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn { display: block; width: 100%; padding: 15px; background: #007aff; color: white; text-align: center; border-radius: 8px; text-decoration: none; font-size: 18px; font-weight: bold; cursor: pointer; border: none; margin-bottom: 10px; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-save { background: #34c759; }
+        .btn-delete { background: #ff3b30; padding: 8px 12px; font-size: 14px; display: inline-block; width: auto; margin: 0; }
+        .btn-export { background: #ff9500; }
+        .btn-import { background: #5856d6; }
+
+        #cameraInput { display: none; }
+        #preview { max-width: 100%; border-radius: 8px; margin-top: 15px; display: none; }
+        #status { margin-top: 10px; color: #666; font-size: 14px; text-align: center; font-weight: bold; }
+        .result-item { margin-bottom: 15px; }
+        .result-label { font-size: 13px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
+        .result-input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #d1d1d6; border-radius: 8px; box-sizing: border-box; background-color: #fafafa; }
+        .result-input:focus { outline: none; border-color: #007aff; background-color: #fff; }
+        .saved-item { background: #f0f4f8; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #007aff; display: flex; justify-content: space-between; align-items: center; }
+        .saved-info { font-size: 15px; line-height: 1.5; color: #333; }
+        .clickable-name { font-size: 18px; display: block; margin-bottom: 4px; color: #007aff; text-decoration: underline; cursor: pointer; }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }
+        .modal-content { margin: auto; display: block; max-width: 95%; max-height: 80vh; margin-top: 15vh; border-radius: 8px; object-fit: contain; }
+        .close { position: absolute; top: 20px; right: 25px; color: white; font-size: 40px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="card" id="settingsCard">
+        <h3>⚙️ AI 引擎設定 (首次使用需設定)</h3>
+        <input type="password" class="result-input" id="apiKeyInput" placeholder="請貼上你的 Gemini API Key" onchange="saveApiKey()">
+        <div style="font-size: 12px; color: #888; margin-top: 8px;">只需輸入一次，金鑰會安全保存在你的手機瀏覽器中。</div>
+    </div>
+
+    <div class="card">
+        <h2>🧠 AI 名片掃描</h2>
+        <input type="file" accept="image/*" capture="environment" id="cameraInput">
+        <button class="btn" id="scanBtn" onclick="document.getElementById('cameraInput').click()">拍照或上傳名片</button>
+        <img id="preview" alt="名片預覽">
+        <div id="status"></div>
+    </div>
+
+    <div class="card" id="resultCard" style="display: none;">
+        <h3>✏️ 檢查與修改</h3>
+        <div class="result-item">
+            <div class="result-label">名稱 / 姓名</div>
+            <input type="text" class="result-input" id="resName" placeholder="AI 正在分析...">
+        </div>
+        <div class="result-item">
+            <div class="result-label">手機</div>
+            <input type="tel" class="result-input" id="resPhone" placeholder="AI 正在分析...">
+        </div>
+        <div class="result-item">
+            <div class="result-label">Email</div>
+            <input type="email" class="result-input" id="resEmail" placeholder="AI 正在分析...">
+        </div>
+        <button class="btn btn-save" onclick="saveCurrentCard()">💾 儲存這筆名片</button>
+    </div>
+
+    <div class="card" id="savedContainer" style="display: none;">
+        <h3>📂 已儲存名片清單</h3>
+        <div id="savedCardsList"></div>
+    </div>
+
+    <div class="card">
+        <h3>💾 資料備份與還原</h3>
+        <button class="btn btn-export" onclick="exportBackup()">⬇️ 匯出備份檔 (.json)</button>
+        <input type="file" id="importInput" accept=".json" style="display: none;" onchange="importBackup(event)">
+        <button class="btn btn-import" onclick="document.getElementById('importInput').click()">⬆️ 匯入備份檔</button>
+    </div>
+
+    <div id="imageModal" class="modal">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="modalImg">
+    </div>
+
+    <script>
+        const cameraInput = document.getElementById('cameraInput');
+        const preview = document.getElementById('preview');
+        const status = document.getElementById('status');
+        const scanBtn = document.getElementById('scanBtn');
+        const resultCard = document.getElementById('resultCard');
+        
+        let savedCardsArray = [];
+        let currentImageData = null;
+
+        // 載入網頁時，檢查是否有存過 API Key 並載入清單
+        window.onload = function() {
+            const savedKey = localStorage.getItem('geminiApiKey');
+            if(savedKey) {
+                document.getElementById('apiKeyInput').value = savedKey;
+            }
+        };
+
+        function saveApiKey() {
+            const key = document.getElementById('apiKeyInput').value.trim();
+            localStorage.setItem('geminiApiKey', key);
+            alert("API 金鑰已儲存！");
+        }
+
+        cameraInput.addEventListener('change', function(e) {
+            if (e.target.files && e.target.files[0]) {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    currentImageData = event.target.result;
+                    preview.src = currentImageData;
+                    preview.style.display = 'block';
+                    performAIOCR(currentImageData);
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // --- 核心升級：呼叫 Gemini AI 視覺模型 ---
+        async function performAIOCR(imageData) {
+            const apiKey = localStorage.getItem('geminiApiKey');
+            if (!apiKey) {
+                alert("請先在上方設定區輸入你的 Gemini API 金鑰！");
+                return;
+            }
+
+            scanBtn.disabled = true;
+            resultCard.style.display = 'none';
+            status.innerText = "🧠 AI 正在理解名片內容，請稍候...";
+
+            try {
+                // 將圖片轉換為 AI 要求的格式
+                const base64Data = imageData.split(',')[1];
+                const mimeType = imageData.split(';')[0].split(':')[1];
+
+                // 給 AI 的指令 (Prompt)
+                const promptText = `你現在是一個專業的名片資料整理助理。
+請看這張名片圖片，並提取以下 3 個欄位：
+1. name: 名片上的「人名」(請忽略職稱、公司名或地址)
+2. phone: 台灣手機號碼 (請整理成 09 開頭的 10 碼數字，例如 0912345678。如果有市話請忽略，以手機優先)
+3. email: 電子信箱
+
+請務必「只」回傳一個 JSON 格式的物件，不要加上任何說明文字或 Markdown 標籤。如果某個欄位找不到，請回傳空字串 ""。
+範例格式：
+{"name": "王小明", "phone": "0912345678", "email": "test@example.com"}`;
+
+                const requestBody = {
+                    contents: [{
+                        parts: [
+                            { text: promptText },
+                            { inline_data: { mime_type: mimeType, data: base64Data } }
+                        ]
+                    }],
+                    generationConfig: {
+                        temperature: 0.1 // 降低溫度，讓 AI 專注於精確的事實提取
+                    }
+                };
+
+                // 發送請求給 Google Gemini API
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    throw new Error("API 請求失敗，請檢查金鑰是否正確填寫。");
+                }
+
+                const result = await response.json();
+                let aiResponseText = result.candidates[0].content.parts[0].text;
+                
+                // 清理 AI 可能回傳的 Markdown 標記
+                aiResponseText = aiResponseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+                
+                // 解析 JSON
+                const parsedData = JSON.parse(aiResponseText);
+
+                status.innerText = "✨ AI 辨識完成！請確認下方結果。";
+                
+                // 自動填入欄位
+                document.getElementById('resName').value = parsedData.name || "";
+                document.getElementById('resPhone').value = parsedData.phone || "";
+                document.getElementById('resEmail').value = parsedData.email || "";
+                
+                resultCard.style.display = 'block';
+
+            } catch (error) {
+                console.error(error);
+                status.innerText = "❌ AI 辨識失敗，請確認 API 金鑰是否有效或網路狀況。";
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        // --- 以下為原本的儲存、備份與還原邏輯 (完全保留) ---
+
+        function saveCurrentCard() {
+            const name = document.getElementById('resName').value.trim();
+            const phone = document.getElementById('resPhone').value.trim();
+            const email = document.getElementById('resEmail').value.trim();
+
+            if (!name && !phone && !email) {
+                alert("至少需要填寫一項資料才能儲存喔！");
+                return;
+            }
+
+            savedCardsArray.push({ name, phone, email, imageData: currentImageData });
+            
+            resultCard.style.display = 'none';
+            preview.style.display = 'none';
+            status.innerText = "✅ 儲存成功！您可以繼續拍下一張。";
+            renderSavedCards();
+        }
+
+        function renderSavedCards() {
+            const container = document.getElementById('savedContainer');
+            const list = document.getElementById('savedCardsList');
+            
+            if (savedCardsArray.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'block';
+            list.innerHTML = ""; 
+            
+            savedCardsArray.forEach((card, index) => {
+                const cardHtml = `
+                    <div class="saved-item">
+                        <div class="saved-info">
+                            <span class="clickable-name" onclick="viewImage(${index})">
+                                🖼️ ${card.name || '未輸入姓名'}
+                            </span>
+                            📱 ${card.phone || '無手機'}<br>
+                            ✉️ ${card.email || '無信箱'}
+                        </div>
+                        <button class="btn btn-delete" onclick="deleteCard(${index})">刪除</button>
+                    </div>
+                `;
+                list.innerHTML += cardHtml;
+            });
+        }
+
+        function deleteCard(index) {
+            if(confirm("確定要刪除這筆資料嗎？")) {
+                savedCardsArray.splice(index, 1);
+                renderSavedCards();
+            }
+        }
+
+        function viewImage(index) {
+            const modal = document.getElementById("imageModal");
+            const modalImg = document.getElementById("modalImg");
+            modalImg.src = savedCardsArray[index].imageData;
+            modal.style.display = "block";
+        }
+
+        function closeModal() {
+            const modal = document.getElementById("imageModal");
+            modal.style.display = "none";
+        }
+
+        function exportBackup() {
+            if (savedCardsArray.length === 0) {
+                alert("目前沒有任何名片可以備份喔！");
+                return;
+            }
+            const dataStr = JSON.stringify(savedCardsArray);
+            const blob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            const dateStr = new Date().toISOString().slice(0,10);
+            a.download = `名片備份_${dateStr}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function importBackup(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    if (Array.isArray(importedData)) {
+                        savedCardsArray = savedCardsArray.concat(importedData);
+                        renderSavedCards();
+                        alert(`成功匯入 ${importedData.length} 筆名片資料與照片！`);
+                    } else {
+                        alert("備份檔格式不正確，請確認檔案。");
+                    }
+                } catch (error) {
+                    alert("讀取備份檔失敗，檔案可能已損毀。");
+                }
+                event.target.value = '';
+            };
+            reader.readAsText(file);
+        }
+    </script>
+</body>
+</html>
